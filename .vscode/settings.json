@@ -1,3 +1,15 @@
 {
-    "gitdoc.enabled": false
+    "gitdoc.enabled": false,
+    "files.associations": {
+        "*.ino": "cpp",
+        "*.inc": "cpp",
+        "*.tcc": "cpp",
+        "exception": "cpp",
+        "fstream": "cpp",
+        "iosfwd": "cpp",
+        "new": "cpp",
+        "ostream": "cpp",
+        "sstream": "cpp",
+        "streambuf": "cpp"
+    }
 }

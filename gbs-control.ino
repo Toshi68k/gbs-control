@@ -22,11 +22,25 @@
 #include "SSD1306Wire.h"
 #include "fonts.h"
 #include "images.h"
-SSD1306Wire display(0x3c, D2, D1); //inits I2C address & pins for OLED
-const int pin_clk = 14;            //D5 = GPIO14 (input of one direction for encoder)
-const int pin_data = 13;           //D7 = GPIO13	(input of one direction for encoder)
-const int pin_switch = 0;          //D3 = GPIO0 pulled HIGH, else boot fail (middle push button for encoder)
+#define HAVE_BUTTONS
 
+#define USE_NEW_OLED_MENU 1
+#define EMPTY_SLOT_NAME "Empty                   "
+#define REVERSE_ROTATORY_ENCODER 0
+
+SSD1306Wire display(0x3c, D2, D1); // inits I2C address & pins for OLED
+const int pin_clk = 14;            // D5 = GPIO14 (input of one direction for encoder)
+const int pin_data = 13;           // D7 = GPIO13	(input of one direction for encoder)
+const int pin_switch = 0;          // D3 = GPIO0 pulled HIGH, else boot fail (middle push button for encoder)
+
+#if USE_NEW_OLED_MENU
+#include "OLEDMenuManager.h"
+OLEDMenuManager oledMenu(&display);
+unsigned long oledMenuFreezeStartTime;
+unsigned long oledMenuFreezeTimeoutInMS;
+volatile OLEDMenuNav oledNav = OLEDMenuNav::IDLE;
+volatile uint8_t rotaryIsrID = 0;
+#else
 String oled_menu[4] = {"Resolutions", "Presets", "Misc.", "Current Settings"};
 String oled_Resolutions[7] = {"1280x960", "1280x1024", "1280x720", "1920x1080", "480/576", "Downscale", "Pass-Through"};
 String oled_Presets[8] = {"1", "2", "3", "4", "5", "6", "7", "Back"};
@@ -39,10 +53,10 @@ int oled_page = 0;
 
 int oled_lastCount = 0;
 volatile int oled_encoder_pos = 0;
-volatile int oled_main_pointer = 0; //volatile vars change done with ISR
+volatile int oled_main_pointer = 0; // volatile vars change done with ISR
 volatile int oled_pointer_count = 0;
 volatile int oled_sub_pointer = 0;
-
+#endif
 #include <ESP8266WiFi.h>
 // ESPAsyncTCP and ESPAsyncWebServer libraries by me-no-dev
 // download (green "Clone or download" button) and extract to Arduino libraries folder
@@ -7080,6 +7094,376 @@ void loadDefaultUserOptions()
 //  //system_phy_set_powerup_option(3); // 0 = default, use init byte; 3 = full calibr. each boot, extra 200ms
 //  system_phy_set_powerup_option(0);
 //}
+#if USE_NEW_OLED_MENU
+enum MenuItemTag {
+    MT_NULL,
+    MT_1280x960,
+    MT1280x1024,
+    MT1280x720,
+    MT1920x1080,
+    MT_480s576,
+    MT_DOWNSCALE,
+    MT_BYPASS,
+    MT_RESET_GBS,
+    MT_RESTORE_FACTORY,
+    MT_RESET_WIFI,
+};
+
+OLED_MENU_HANDLER(resolutionMenuHandler)
+{
+    if (!isFirstTime) {
+        if (millis() - oledMenuFreezeStartTime >= oledMenuFreezeTimeoutInMS) {
+            manager->unfreeze();
+        }
+        return false;
+    }
+    oledMenuFreezeTimeoutInMS = 500; // freeze for 0.5s
+    oledMenuFreezeStartTime = millis();
+    OLEDDisplay *display = manager->getDisplay();
+    display->clear();
+    display->setColor(OLEDDISPLAY_COLOR::WHITE);
+    display->setFont(ArialMT_Plain_16);
+    display->setTextAlignment(OLEDDISPLAY_TEXT_ALIGNMENT::TEXT_ALIGN_CENTER);
+    display->drawString(OLED_MENU_WIDTH / 2, 16, item->str);
+    display->drawXbm((OLED_MENU_WIDTH - TEXT_LOADED_WIDTH) / 2, OLED_MENU_HEIGHT / 2, IMAGE_ITEM(TEXT_LOADED));
+    display->display();
+    uint8_t videoMode = getVideoMode();
+    uint8_t preset = 0;
+    switch (item->tag) {
+        case MT_1280x960:
+            preset = 0;
+            break;
+        case MT1280x1024:
+            preset = 4;
+            break;
+        case MT1280x720:
+            preset = 3;
+            break;
+        case MT1920x1080:
+            preset = 5;
+            break;
+        case MT_480s576:
+            preset = 1;
+            break;
+        case MT_DOWNSCALE:
+            preset = 6;
+            break;
+        case MT_BYPASS:
+            preset = 10;
+            break;
+        default:
+            break;
+    }
+    if (videoMode == 0 && GBS::STATUS_SYNC_PROC_HSACT::read()) {
+        videoMode = rto->videoStandardInput;
+    }
+    if (item->tag != MT_BYPASS) {
+        uopt->presetPreference = preset;
+        rto->useHdmiSyncFix = 1;
+        if (rto->videoStandardInput == 14) {
+            rto->videoStandardInput = 15;
+        } else {
+            applyPresets(videoMode);
+        }
+    } else {
+        setOutModeHdBypass();
+        uopt->presetPreference = preset;
+        if (rto->videoStandardInput != 15) {
+            rto->autoBestHtotalEnabled = 0;
+            if (rto->applyPresetDoneStage == 11) {
+                rto->applyPresetDoneStage = 1;
+            } else {
+                rto->applyPresetDoneStage = 10;
+            }
+        } else {
+            rto->applyPresetDoneStage = 1;
+        }
+    }
+    saveUserPrefs();
+    manager->freeze();
+    return false;
+}
+
+OLED_MENU_HANDLER(presetSelectionMenuHandler)
+{
+    if (!isFirstTime) {
+        if (millis() - oledMenuFreezeStartTime >= oledMenuFreezeTimeoutInMS) {
+            manager->unfreeze();
+        }
+        return false;
+    }
+    OLEDDisplay *display = manager->getDisplay();
+    display->clear();
+    display->setColor(OLEDDISPLAY_COLOR::WHITE);
+    display->setFont(ArialMT_Plain_16);
+    display->setTextAlignment(OLEDDISPLAY_TEXT_ALIGNMENT::TEXT_ALIGN_CENTER);
+    display->drawString(OLED_MENU_WIDTH / 2, 16, item->str);
+    display->drawXbm((OLED_MENU_WIDTH - TEXT_LOADED_WIDTH) / 2, OLED_MENU_HEIGHT / 2, IMAGE_ITEM(TEXT_LOADED));
+    display->display();
+    uopt->presetSlot = 'A' + item->tag; // ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~()!*:,
+    uopt->presetPreference = 2;
+    if (rto->videoStandardInput == 14) {
+        rto->videoStandardInput = 15;
+    } else {
+        applyPresets(rto->videoStandardInput);
+    }
+    saveUserPrefs();
+    manager->freeze();
+    oledMenuFreezeTimeoutInMS = 2000;
+    oledMenuFreezeStartTime = millis();
+
+    return false;
+}
+
+OLED_MENU_HANDLER(presetsCreationMenuHandler)
+{
+    SlotMetaArray slotsObject;
+    File slotsBinaryFileRead = SPIFFS.open(SLOTS_FILE, "r");
+
+    manager->clearSubItems(item);
+    bool found = false;
+    if (slotsBinaryFileRead) {
+        slotsBinaryFileRead.read((byte *)&slotsObject, sizeof(slotsObject));
+        slotsBinaryFileRead.close();
+        constexpr uint8_t max = OLED_MENU_MAX_SUBITEMS_NUM < 8 ? OLED_MENU_MAX_SUBITEMS_NUM : 8;
+        for (int i; i < max; ++i) {
+            // only show top 8 here. use web ui to select other slots
+            const SlotMeta &slot = slotsObject.slot[i];
+            if (strcmp(EMPTY_SLOT_NAME, slot.name) == 0 || !strlen(slot.name)) {
+                continue;
+            }
+            found = true;
+            manager->registerItem(item, slot.slot, slot.name, presetSelectionMenuHandler);
+        }
+    }
+    if (!found) {
+        manager->registerItem(item, 0, IMAGE_ITEM(TEXT_NO_PRESETS));
+    }
+    return true;
+}
+
+OLED_MENU_HANDLER(resetMenuHandler)
+{
+    if (!isFirstTime) {
+        // not precise
+        if (millis() - oledMenuFreezeStartTime >= oledMenuFreezeTimeoutInMS) {
+            manager->unfreeze();
+            ESP.reset();
+            return false;
+        }
+        return false;
+    }
+
+    OLEDDisplay *display = manager->getDisplay();
+    display->clear();
+    display->setColor(OLEDDISPLAY_COLOR::WHITE);
+    switch (item->tag) {
+        case MT_RESET_GBS:
+            display->drawXbm(CENTER_IMAGE(TEXT_RESETTING_GBS));
+            break;
+        case MT_RESTORE_FACTORY:
+            display->drawXbm(CENTER_IMAGE(TEXT_RESTORING));
+            break;
+        case MT_RESET_WIFI:
+            display->drawXbm(CENTER_IMAGE(TEXT_RESETTING_WIFI));
+            break;
+    }
+    display->display();
+    webSocket.close();
+    delay(50);
+    switch (item->tag) {
+        case MT_RESET_WIFI:
+            WiFi.disconnect();
+            break;
+        case MT_RESTORE_FACTORY:
+            loadDefaultUserOptions();
+            saveUserPrefs();
+            break;
+    }
+    manager->freeze();
+    oledMenuFreezeStartTime = millis();
+    oledMenuFreezeTimeoutInMS = 2000; // freeze for 2 seconds
+    return false;
+}
+
+
+OLED_MENU_HANDLER(currentSettingHandler)
+{
+    if (isFirstTime) {
+        oledMenuFreezeStartTime = millis();
+        oledMenuFreezeTimeoutInMS = 2000; // freeze for 2 seconds if no input
+    } else if (nav == OLEDMenuNav::ENTER) {
+        manager->unfreeze();
+        return false;
+    }
+    OLEDDisplay &display = *manager->getDisplay();
+    display.clear();
+    display.setColor(OLEDDISPLAY_COLOR::WHITE);
+    display.setFont(ArialMT_Plain_16);
+    if (rto->sourceDisconnected || !rto->boardHasPower) {
+        if (millis() - oledMenuFreezeStartTime >= oledMenuFreezeTimeoutInMS) {
+            manager->unfreeze();
+            return false;
+        }
+        display.setTextAlignment(OLEDDISPLAY_TEXT_ALIGNMENT::TEXT_ALIGN_CENTER);
+        display.drawXbm(CENTER_IMAGE(TEXT_NO_INPUT));
+    } else {
+        // TODO translations
+        boolean vsyncActive = 0;
+        boolean hsyncActive = 0;
+        float ofr = getOutputFrameRate();
+        uint8_t currentInput = GBS::ADC_INPUT_SEL::read();
+        rto->presetID = GBS::GBS_PRESET_ID::read();
+
+        display.setFont(URW_Gothic_L_Book_20);
+        display.setTextAlignment(TEXT_ALIGN_LEFT);
+
+        if (rto->presetID == 0x01 || rto->presetID == 0x11) {
+            display.drawString(0, 0, "1280x960");
+        } else if (rto->presetID == 0x02 || rto->presetID == 0x12) {
+            display.drawString(0, 0, "1280x1024");
+        } else if (rto->presetID == 0x03 || rto->presetID == 0x13) {
+            display.drawString(0, 0, "1280x720");
+        } else if (rto->presetID == 0x05 || rto->presetID == 0x15) {
+            display.drawString(0, 0, "1920x1080");
+        } else if (rto->presetID == 0x06 || rto->presetID == 0x16) {
+            display.drawString(0, 0, "Downscale");
+        } else if (rto->presetID == 0x04) {
+            display.drawString(0, 0, "720x480");
+        } else if (rto->presetID == 0x14) {
+            display.drawString(0, 0, "768x576");
+        } else {
+            display.drawString(0, 0, "bypass");
+        }
+
+        display.drawString(0, 20, String(ofr, 5) + "Hz");
+
+        if (currentInput == 1) {
+            display.drawString(0, 41, "RGB");
+        } else {
+            display.drawString(0, 41, "YpBpR");
+        }
+
+        if (currentInput == 1) {
+            vsyncActive = GBS::STATUS_SYNC_PROC_VSACT::read();
+            if (vsyncActive) {
+                display.drawString(70, 41, "V");
+                hsyncActive = GBS::STATUS_SYNC_PROC_HSACT::read();
+                if (hsyncActive) {
+                    display.drawString(53, 41, "H");
+                }
+            }
+        }
+    }
+    display.display();
+    manager->freeze();
+    return false;
+}
+OLED_MENU_HANDLER(wifiMenuHandler)
+{
+    static char ssid[64];
+    static char ip[25];
+    static char domain[25];
+    WiFiMode_t wifiMode = WiFi.getMode();
+    manager->clearSubItems(item);
+    if (wifiMode == WIFI_STA) {
+        sprintf(ssid, "SSID: %s", WiFi.SSID().c_str());
+        manager->registerItem(item, 0, ssid);
+        if (WiFi.isConnected()) {
+            manager->registerItem(item, 0, IMAGE_ITEM(TEXT_WIFI_CONNECTED));
+            manager->registerItem(item, 0, IMAGE_ITEM(TEXT_WIFI_URL));
+            sprintf(ip, "http://%s", WiFi.localIP().toString().c_str());
+            manager->registerItem(item, 0, ip);
+            sprintf(domain, "http://%s", device_hostname_full);
+            manager->registerItem(item, 0, domain);
+        } else {
+            // shouldn't happen?
+            manager->registerItem(item, 0, IMAGE_ITEM(TEXT_WIFI_DISCONNECTED));
+        }
+    } else if (wifiMode == WIFI_AP) {
+        manager->registerItem(item, 0, IMAGE_ITEM(TEXT_WIFI_CONNECT_TO));
+        sprintf(ssid, "SSID: %s (%s)", ap_ssid, ap_password);
+        manager->registerItem(item, 0, ssid);
+        manager->registerItem(item, 0, IMAGE_ITEM(TEXT_WIFI_URL));
+        manager->registerItem(item, 0, "http://192.168.4.1");
+        sprintf(domain, "http://%s", device_hostname_full);
+        manager->registerItem(item, 0, domain);
+    } else {
+        // shouldn't happen?
+        manager->registerItem(item, 0, IMAGE_ITEM(TEXT_WIFI_DISCONNECTED));
+    }
+    return true;
+}
+void initOLEDMenu()
+{
+    OLEDMenuItem *root = oledMenu.rootItem;
+    OLEDMenuItem *resMenu = oledMenu.registerItem(root, MT_NULL, IMAGE_ITEM(OM_RESO));
+
+    // Resolutions
+    const char *resolutions[5] = {"1280x960", "1280x1024", "1280x720", "1920x1080", "480/576"};
+    uint8_t tags[5] = {MT_1280x960, MT1280x1024, MT1280x720, MT1920x1080, MT_480s576};
+    for (int i = 0; i < 5; ++i) {
+        oledMenu.registerItem(resMenu, tags[i], resolutions[i], resolutionMenuHandler);
+    }
+    // downscale and passthrough
+    oledMenu.registerItem(resMenu, MT_DOWNSCALE, IMAGE_ITEM(OM_DOWNSCALE), resolutionMenuHandler);
+    oledMenu.registerItem(resMenu, MT_BYPASS, IMAGE_ITEM(OM_PASSTHRU), resolutionMenuHandler);
+
+    // Presets
+    OLEDMenuItem *presetMenu = oledMenu.registerItem(root, MT_NULL, IMAGE_ITEM(OM_PRESET), presetsCreationMenuHandler);
+
+    // WiFi
+    oledMenu.registerItem(root, MT_NULL, IMAGE_ITEM(OM_WIFI), wifiMenuHandler);
+
+    // Current Settings
+    oledMenu.registerItem(root, MT_NULL, IMAGE_ITEM(OM_CURRENT), currentSettingHandler);
+
+    // Reset (Misc.)
+    OLEDMenuItem *resetMenu = oledMenu.registerItem(root, MT_NULL, IMAGE_ITEM(OM_RESET_RESTORE));
+    oledMenu.registerItem(resetMenu, MT_RESET_GBS, IMAGE_ITEM(OM_RESET_GBS), resetMenuHandler);
+    oledMenu.registerItem(resetMenu, MT_RESTORE_FACTORY, IMAGE_ITEM(OM_RESTORE_FACTORY), resetMenuHandler);
+    oledMenu.registerItem(resetMenu, MT_RESET_WIFI, IMAGE_ITEM(OM_RESET_WIFI), resetMenuHandler);
+}
+
+void ICACHE_RAM_ATTR isrRotaryEncoderRotate()
+{
+    unsigned long interruptTime = millis();
+    static unsigned long lastInterruptTime = 0;
+    static unsigned long lastNavUpdateTime = 0;
+    static OLEDMenuNav lastNav;
+    OLEDMenuNav newNav;
+    if (interruptTime - lastInterruptTime > 250) {
+        if (!digitalRead(pin_data)) {
+            newNav = REVERSE_ROTATORY_ENCODER ? OLEDMenuNav::UP : OLEDMenuNav::DOWN;
+        } else {
+            newNav = REVERSE_ROTATORY_ENCODER ? OLEDMenuNav::DOWN : OLEDMenuNav::UP;
+        }
+        if (newNav != lastNav && (interruptTime - lastNavUpdateTime < 800)) {
+            // ignore rapid changes to filter out mis-reads. besides, you are not supposed to rotate the encoder this fast anyway
+            oledNav = lastNav = OLEDMenuNav::IDLE;
+        }
+        else{
+            lastNav = oledNav = newNav;
+            ++rotaryIsrID;
+            lastNavUpdateTime = interruptTime;
+        }
+        lastInterruptTime = interruptTime;
+    }
+}
+
+void ICACHE_RAM_ATTR isrRotaryEncoderPush()
+{
+    static unsigned long lastInterruptTime = 0;
+    unsigned long interruptTime = millis();
+    if (interruptTime - lastInterruptTime > 800) {
+        // oledNav = OLEDMenuNav::ENTER;
+        // ++rotaryIsrID;
+        Menu::run(MenuInput::FORWARD);
+    }
+    lastInterruptTime = interruptTime;
+}
+
+#else
 void ICACHE_RAM_ATTR isrRotaryEncoder()
 {
     static unsigned long lastInterruptTime = 0;
@@ -7091,19 +7475,20 @@ void ICACHE_RAM_ATTR isrRotaryEncoder()
             oled_main_pointer += 15;
             oled_sub_pointer += 15;
             oled_pointer_count++;
-            //down = true;
-            //up = false;
+            // down = true;
+            // up = false;
         } else {
             oled_encoder_pos--;
             oled_main_pointer -= 15;
             oled_sub_pointer -= 15;
             oled_pointer_count--;
-            //down = false;
-            //up = true;
+            // down = false;
+            // up = true;
         }
     }
     lastInterruptTime = interruptTime;
 }
+#endif
 void setup()
 {
     display.init();                 //inits OLED on I2C bus
@@ -7112,8 +7497,15 @@ void setup()
     pinMode(pin_clk, INPUT_PULLUP);
     pinMode(pin_data, INPUT_PULLUP);
     pinMode(pin_switch, INPUT_PULLUP);
-    //ISR TO PIN
+
+#if USE_NEW_OLED_MENU
+    attachInterrupt(digitalPinToInterrupt(pin_clk), isrRotaryEncoderRotate, FALLING);
+    attachInterrupt(digitalPinToInterrupt(pin_switch), isrRotaryEncoderPush, FALLING);
+    initOLEDMenu();
+#else
+    // ISR TO PIN
     attachInterrupt(digitalPinToInterrupt(pin_clk), isrRotaryEncoder, FALLING);
+#endif
 
     rto->webServerEnabled = true;
     rto->webServerStarted = false; // make sure this is set
@@ -7464,10 +7856,10 @@ static uint8_t buttonChanged;
 
 uint8_t readButtons(void)
 {
-    return ~((digitalRead(INPUT_PIN) << INPUT_SHIFT) |
-             (digitalRead(DOWN_PIN) << DOWN_SHIFT) |
-             (digitalRead(UP_PIN) << UP_SHIFT) |
-             (digitalRead(MENU_PIN) << MENU_SHIFT));
+    return ~((digitalRead(pin_data) << INPUT_SHIFT) |
+             (digitalRead(pin_clk) << DOWN_SHIFT) |
+             (digitalRead(pin_data) << UP_SHIFT) |
+             (digitalRead(pin_switch) << MENU_SHIFT));
 }
 
 void debounceButtons(void)
@@ -7491,8 +7883,8 @@ void handleButtons(void)
         Menu::run(MenuInput::BACK);
     if (buttonDown(DOWN_SHIFT))
         Menu::run(MenuInput::DOWN);
-    if (buttonDown(UP_SHIFT))
-        Menu::run(MenuInput::UP);
+    // if (buttonDown(UP_SHIFT))
+    //     Menu::run(MenuInput::UP);
     if (buttonDown(MENU_SHIFT))
         Menu::run(MenuInput::FORWARD);
 }
@@ -7658,17 +8050,28 @@ void loop()
     static unsigned long lastTimeSourceCheck = 500; // 500 to start right away (after setup it will be 2790ms when we get here)
     static unsigned long lastTimeInterruptClear = millis();
 
+#if USE_NEW_OLED_MENU
+    uint8_t oldIsrID = rotaryIsrID;
+    // make sure no rotary encoder isr happened while menu was updating.
+    // skipping this check will make the rotary encoder not responsive randomly.
+    // (oledNav change will be lost if isr happened during the menu updating)
+    oledMenu.tick(oledNav);
+    if (oldIsrID == rotaryIsrID) {
+        oledNav = OLEDMenuNav::IDLE;
+    }
+#else
     settingsMenuOLED();
     if (oled_encoder_pos != oled_lastCount) {
         oled_lastCount = oled_encoder_pos;
     }
+#endif
 
 #ifdef HAVE_BUTTONS
     static unsigned long lastButton = micros();
 
     if (micros() - lastButton > buttonPollInterval) {
         lastButton = micros();
-        handleButtons();
+        // handleButtons();
     }
 #endif
 
@@ -9896,6 +10299,7 @@ void saveUserPrefs()
 
 #endif
 
+#if !USE_NEW_OLED_MENU
 //OLED Functionality
 void settingsMenuOLED()
 {
@@ -10506,3 +10910,4 @@ void subpointerfunction()
         oled_pointer_count = 7;
     }
 }
+#endif

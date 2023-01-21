@@ -380,3 +380,8 @@ ASALocalRun/
 
 # MFractors (Xamarin productivity tool) working folder
 .mfractor/
+
+# vscode
+.vscode/
+
+i18n_preview_*.jpg
