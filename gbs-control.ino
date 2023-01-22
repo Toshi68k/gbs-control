@@ -7456,9 +7456,8 @@ void ICACHE_RAM_ATTR isrRotaryEncoderPush()
     static unsigned long lastInterruptTime = 0;
     unsigned long interruptTime = millis();
     if (interruptTime - lastInterruptTime > 800) {
-        // oledNav = OLEDMenuNav::ENTER;
-        // ++rotaryIsrID;
-        Menu::run(MenuInput::FORWARD);
+        oledNav = OLEDMenuNav::ENTER;
+        ++rotaryIsrID;
     }
     lastInterruptTime = interruptTime;
 }
