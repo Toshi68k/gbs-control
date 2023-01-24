@@ -7117,7 +7117,7 @@ OLED_MENU_HANDLER(resolutionMenuHandler)
         }
         return false;
     }
-    oledMenuFreezeTimeoutInMS = 500; // freeze for 0.5s
+    oledMenuFreezeTimeoutInMS = 1000; // freeze for 1s
     oledMenuFreezeStartTime = millis();
     OLEDDisplay *display = manager->getDisplay();
     display->clear();
