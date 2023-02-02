@@ -24,7 +24,7 @@
 #include "images.h"
 #define HAVE_BUTTONS
 
-#define USE_NEW_OLED_MENU 1
+#define USE_NEW_OLED_MENU 0
 #define EMPTY_SLOT_NAME "Empty                   "
 #define REVERSE_ROTATORY_ENCODER 0
 
