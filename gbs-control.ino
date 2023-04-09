@@ -24,7 +24,7 @@
 #include "images.h"
 #define HAVE_BUTTONS
 
-#define USE_NEW_OLED_MENU 0
+#define USE_NEW_OLED_MENU 1
 #define EMPTY_SLOT_NAME "Empty                   "
 #define REVERSE_ROTATORY_ENCODER 0
 
@@ -7128,28 +7128,28 @@ OLED_MENU_HANDLER(resolutionMenuHandler)
     display->drawXbm((OLED_MENU_WIDTH - TEXT_LOADED_WIDTH) / 2, OLED_MENU_HEIGHT / 2, IMAGE_ITEM(TEXT_LOADED));
     display->display();
     uint8_t videoMode = getVideoMode();
-    uint8_t preset = 0;
+    OutputMode preset = Output960P;
     switch (item->tag) {
         case MT_1280x960:
-            preset = 0;
+            preset = Output960P;
             break;
         case MT1280x1024:
-            preset = 4;
+            preset = Output1024P;
             break;
         case MT1280x720:
-            preset = 3;
+            preset = Output720P;
             break;
         case MT1920x1080:
-            preset = 5;
+            preset = Output1080P;
             break;
         case MT_480s576:
-            preset = 1;
+            preset = Output480P;
             break;
         case MT_DOWNSCALE:
-            preset = 6;
+            preset = OutputDownscale;
             break;
         case MT_BYPASS:
-            preset = 10;
+            preset = OutputBypass;
             break;
         default:
             break;
@@ -7201,7 +7201,7 @@ OLED_MENU_HANDLER(presetSelectionMenuHandler)
     display->drawXbm((OLED_MENU_WIDTH - TEXT_LOADED_WIDTH) / 2, OLED_MENU_HEIGHT / 2, IMAGE_ITEM(TEXT_LOADED));
     display->display();
     uopt->presetSlot = 'A' + item->tag; // ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~()!*:,
-    uopt->presetPreference = 2;
+    uopt->presetPreference = OutputCustomized;
     if (rto->videoStandardInput == 14) {
         rto->videoStandardInput = 15;
     } else {
