@@ -7228,7 +7228,7 @@ OLED_MENU_HANDLER(resolutionMenuHandler)
     display->drawXbm((OLED_MENU_WIDTH - TEXT_LOADED_WIDTH) / 2, OLED_MENU_HEIGHT / 2, IMAGE_ITEM(TEXT_LOADED));
     display->display();
     uint8_t videoMode = getVideoMode();
-    OutputMode preset = Output960P;
+    PresetPreference preset = Output960P;
     switch (item->tag) {
         case MT_1280x960:
             preset = Output960P;
@@ -7266,7 +7266,7 @@ OLED_MENU_HANDLER(resolutionMenuHandler)
             applyPresets(videoMode);
         }
     } else {
-        setOutModeHdBypass();
+        setOutModeHdBypass(false);
         uopt->presetPreference = preset;
         if (rto->videoStandardInput != 15) {
             rto->autoBestHtotalEnabled = 0;
